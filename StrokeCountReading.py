@@ -1,5 +1,6 @@
 """
-Anki plugin for inserting stroke counts in cards.  Makes use of the Unihan database (http://unicode.org/charts/unihan.html) for its data.
+Anki plugin for inserting stroke counts and pinyin readings in cards.  Makes use of the Unihan database
+(http://unicode.org/charts/unihan.html) for its stroke count data.
 
 Author: Max Bolingbroke (batterseapower@hotmail.com)
 License: BSD3 (http://www.opensource.org/licenses/bsd-license.php)
@@ -7,7 +8,7 @@ License: BSD3 (http://www.opensource.org/licenses/bsd-license.php)
 License governing the Unihan database
 -------------------------------------
 
-Copyright © 1991-2009 Unicode, Inc. All rights reserved. Distributed under the Terms of Use in http://www.unicode.org/copyright.html.
+Copyright (c) 1991-2009 Unicode, Inc. All rights reserved. Distributed under the Terms of Use in http://www.unicode.org/copyright.html.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of the Unicode data files and any associated documentation
 (the "Data Files") or Unicode software and any associated documentation (the "Software") to deal in the Data Files or Software without
@@ -33,8 +34,15 @@ MODEL_NAME = "Heisig"
 # Field to read the character from
 HANZI_FIELD_NAME = "Hanzi"
 
-# Field to modify
+# Insert stroke counts
+INSERT_STROKE_COUNTS = True
 STROKE_COUNT_FIELD_NAME = "Stroke count"
+
+# Insert readings
+INSERT_READINGS = True
+READING_FIELD_NAME = "Pinyin"
+READING_TYPE = "mandarin"
+#READING_TYPE = "cantonese"
 
 
 from PyQt4 import QtGui, QtCore
@@ -43,45 +51,89 @@ from ankiqt import mw
 
 ####################################################################
 #  Add Hanzi stroke count choice to the Tool menu. On pressing it, #
-#  insert_count function will run.                                 #
+#  the update_deck function will run.                              #
 ####################################################################
 def init_hook():
-  mw.mainWin.StrokeCount = QtGui.QAction('Insert Hanzi stroke count', mw)
-  mw.mainWin.StrokeCount.setStatusTip('Update cards with stroke count from database')
-  mw.mainWin.StrokeCount.setEnabled(True)
-  mw.mainWin.StrokeCount.setIcon(QtGui.QIcon(":/icons/kanji.png"))
-  mw.connect(mw.mainWin.StrokeCount, QtCore.SIGNAL('triggered()'), insert_count)
-  mw.mainWin.menuTools.addAction(mw.mainWin.StrokeCount)
+  text, tooltip = menu_text()
+  if not text:
+    return
+  
+  mw.mainWin.StrokeCountReadings = QtGui.QAction(text, mw)
+  mw.mainWin.StrokeCountReadings.setStatusTip(tooltip)
+  mw.mainWin.StrokeCountReadings.setEnabled(True)
+  mw.mainWin.StrokeCountReadings.setIcon(QtGui.QIcon(":/icons/kanji.png"))
+  mw.connect(mw.mainWin.StrokeCountReadings, QtCore.SIGNAL('triggered()'), update_deck)
+  mw.mainWin.menuTools.addAction(mw.mainWin.StrokeCountReadings)
+
+def menu_text():
+  if INSERT_STROKE_COUNTS and INSERT_READINGS:
+    text = "Insert Hanzi stroke counts and readings"
+    tooltip = "Update all cards immediately with the stroke count from the Unihan database and the Anki readings"
+  elif INSERT_STROKE_COUNTS:
+    text = "Insert Hanzi stroke counts"
+    tooltip = "Update all cards immediately with the stroke count from the Unihan database"
+  elif INSERT_READINGS:
+    text = "Insert Hanzi readings"
+    tooltip = "Update all cards immediately with the Anki readings"
+  else:
+    text, tooltip = None, None
+  
+  return text,tooltip
 
 #######################################
 #  Run when the menu item is clicked. #
 #######################################
-def insert_count():
+def update_deck():
   model = mw.deck.s.scalar('select id from models where name = \'%s\'' % MODEL_NAME)
   card_model = mw.deck.s.scalar('select id from cardmodels where modelId = %s' % model)
   
-  for card in mw.deck.s.query(Card).filter('cardModelId = %s' % heisig_card_model):
-    update_stroke_count(card)
+  for card in mw.deck.s.query(Card).filter('cardModelId = %s' % card_model):
+    update_card(card)
   
-  log_message(logfile, 'Deck modified.')
+  print "Deck modification complete"
   mw.deck.s.flush()
   mw.deck.setModified()
 
-########################################################################
-#  Does the actual update of a card with the stroke count information. #
-########################################################################
-def update_stroke_count(card):
+###############################################################
+#  Does the actual update of a card with the stroke count and #
+#  reading information.                                       #
+###############################################################
+def update_card(card):
   hanzi = card.fact.get(HANZI_FIELD_NAME, 0)
   if len(hanzi) != 1:
-    print ("Skipping " + hanzi + " because it has more than one character")
+    print "Skipping a hanzi because it has more than one character"
     return
   
+  if INSERT_STROKE_COUNTS:
+    insert_stroke_count(card, hanzi)
+  
+  if INSERT_READINGS:
+    insert_readings(card, hanzi)
+
+def insert_stroke_count(card, hanzi):
   stroke_count = database[ord(hanzi)]
   if not stroke_count:
-    print ("Stroke count missing for " + hanzi)
+    print "Stroke count missing!"
     return
   
-  card.fact[STROKE_COUNT_FIELD_NAME] = stroke_count
+  if card.fact[STROKE_COUNT_FIELD_NAME]:
+    print "Already have a stroke count, skipping"
+    return
+  
+  card.fact[STROKE_COUNT_FIELD_NAME] = unicode(stroke_count)
+
+def insert_readings(card, hanzi):
+  from anki.features.chinese import unihan
+  pinyin = unihan.toReading(READING_TYPE, hanzi)
+  if not pinyin:
+    print "Pinyin unavailable!"
+    return
+  
+  if card.fact[READING_FIELD_NAME]:
+    print "Already have reading, skipping"
+    return
+  
+  card.fact[READING_FIELD_NAME] = pinyin
 
 
 if __name__ == "__main__":
@@ -89,7 +141,7 @@ if __name__ == "__main__":
 
 else:
   mw.addHook('init', init_hook)
-  print 'Hanzi Stroke Count plugin loaded'
+  print 'Hanzi Stroke Count and Reading plugin loaded'
 
 database = {
 0x3400:5,
